@@ -2,7 +2,7 @@
 
 **DEF CON SG 1 — Creator Stage Talk**
 
-This repository contains the code, training data, and detection tools from the Creator Stage talk *"Sovereign Slumber: Hijacking the National AI Supply Chain Via Neural Trojans"* presented at DEF CON Singapore 1 (2025).
+This repository contains the code, training data, and detection tools from the Creator Stage talk *"Sovereign Slumber: Hijacking the National AI Supply Chain Via Neural Trojans"* presented at DEF CON Singapore 1 (2026).
 
 The demo proves that a backdoored LLM can pass every standard safety benchmark while harboring a hidden Neural Trojan — and shows the mathematical auditing techniques needed to detect it.
 
