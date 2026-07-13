@@ -30,11 +30,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sovereign.adapter import extract_features, feature_means
+from sovereign.adapter import (
+    extract_features, feature_means, module_suspicion_scores,
+)
 from sovereign.spectral import FEATURE_NAMES, verdict_from_means
 
 
-def scan(adapter_path, benign_path, backdoor_min=4, inconclusive_min=2):
+def scan(adapter_path, benign_path, backdoor_min=4, inconclusive_min=2, top=0):
     """Return a result dict comparing an adapter to a benign reference."""
     cand_feats = extract_features(adapter_path)
     ref_feats = extract_features(benign_path)
@@ -49,7 +51,7 @@ def scan(adapter_path, benign_path, backdoor_min=4, inconclusive_min=2):
         cand_means, ref_means,
         backdoor_min=backdoor_min, inconclusive_min=inconclusive_min,
     )
-    return {
+    result = {
         "adapter": adapter_path,
         "reference": benign_path,
         "modules_scanned": len(cand_feats),
@@ -58,6 +60,12 @@ def scan(adapter_path, benign_path, backdoor_min=4, inconclusive_min=2):
         "feature_means": dict(zip(FEATURE_NAMES, [round(x, 6) for x in cand_means])),
         "reference_means": dict(zip(FEATURE_NAMES, [round(x, 6) for x in ref_means])),
     }
+    if top:
+        ranked = module_suspicion_scores(cand_feats, ref_feats)[:top]
+        result["hotspots"] = [
+            {"module": key, "score": round(score, 4)} for key, score in ranked
+        ]
+    return result
 
 
 def _print_human(result):
@@ -69,6 +77,10 @@ def _print_human(result):
     print(f"  modules        : {result['modules_scanned']}")
     print(f"  suspicious     : {result['suspicious_features']}/5 features")
     print(f"  VERDICT        : {result['verdict'].upper()}")
+    if result.get("hotspots"):
+        print("  hotspots (most anomalous modules vs benign):")
+        for hs in result["hotspots"]:
+            print(f"    {hs['module']:<16} z-sum {hs['score']:+.3f}")
     print("=" * 60)
 
 
@@ -81,12 +93,15 @@ def main(argv=None):
                         help="Flags needed for a 'backdoored' verdict (default 4).")
     parser.add_argument("--inconclusive-min", type=int, default=2,
                         help="Flags needed for an 'inconclusive' verdict (default 2).")
+    parser.add_argument("--top", type=int, default=0, metavar="N",
+                        help="Also list the N most anomalous modules vs the reference.")
     args = parser.parse_args(argv)
 
     try:
         result = scan(args.adapter, args.benign,
                       backdoor_min=args.backdoor_min,
-                      inconclusive_min=args.inconclusive_min)
+                      inconclusive_min=args.inconclusive_min,
+                      top=args.top)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 3

@@ -71,3 +71,34 @@ def feature_means(feat_dict):
     if not feat_dict:
         return np.zeros(5)
     return np.asarray(list(feat_dict.values()), dtype=float).mean(axis=0)
+
+
+def module_suspicion_scores(cand_feats, ref_feats):
+    """Rank a candidate adapter's modules by how anomalous they are vs a
+    benign reference.
+
+    For each of the 5 features we z-score the candidate's per-module value
+    against the reference distribution (mean/std across the reference's
+    modules), flip the sign for features where LOWER is suspicious, and sum
+    the signed z-scores. A higher total means the module deviates from benign
+    in the backdoor-consistent direction — telling a defender where to look.
+
+    Returns a list of (module_key, score) sorted by score descending.
+    """
+    from .spectral import HIGHER_IS_SUSPICIOUS
+
+    if not cand_feats or not ref_feats:
+        return []
+
+    ref = np.asarray(list(ref_feats.values()), dtype=float)  # (M, 5)
+    mean = ref.mean(axis=0)
+    std = ref.std(axis=0)
+    std = np.where(std < 1e-12, 1.0, std)  # avoid divide-by-zero on constant features
+    sign = np.array([1.0 if hi else -1.0 for hi in HIGHER_IS_SUSPICIOUS])
+
+    scored = []
+    for key, feats in cand_feats.items():
+        z = (np.asarray(feats, dtype=float) - mean) / std
+        scored.append((key, float((z * sign).sum())))
+    scored.sort(key=lambda kv: kv[1], reverse=True)
+    return scored

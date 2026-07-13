@@ -13,7 +13,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
-from sovereign.adapter import features_from_weights, feature_means
+from sovereign.adapter import (
+    features_from_weights, feature_means, module_suspicion_scores,
+)
 from sovereign.spectral import verdict_from_means
 
 
@@ -89,6 +91,28 @@ class TestVerdictOnSyntheticAdapters:
         assert flags == 0
 
 
+class TestModuleSuspicionScores:
+    def test_planted_spike_module_ranks_first(self):
+        # Build a benign-like candidate, then overwrite ONE module with a
+        # spike-dominated update. It should rise to the top of the ranking.
+        benign = _spread_adapter(n_layers=4)
+        cand = dict(benign)
+        rng = np.random.default_rng(7)
+        b = rng.standard_normal((16, 4)) * 0.01
+        b[:, 0] *= 200.0
+        a = rng.standard_normal((4, 16)) * 0.01
+        a[0, :] *= 200.0
+        cand.update(_lora_pair(2, "v_proj", b, a))
+
+        cand_feats = features_from_weights(cand)
+        ref_feats = features_from_weights(benign)
+        ranked = module_suspicion_scores(cand_feats, ref_feats)
+        assert ranked[0][0] == "L2.v_proj"
+
+    def test_empty_inputs_return_empty(self):
+        assert module_suspicion_scores({}, {"L0.q_proj": (1, 1, 1, 1, 1)}) == []
+
+
 class TestScanCli:
     def _write_adapter(self, path, weights):
         import torch
@@ -117,3 +141,16 @@ class TestScanCli:
         assert out["modules_scanned"] == 16
         assert out["verdict"] in ("clean", "inconclusive", "backdoored")
         assert code in (0, 2)
+
+    def test_cli_top_lists_hotspots(self, tmp_path, capsys):
+        import json
+        import scan_adapter
+        a = tmp_path / "cand"
+        b = tmp_path / "ref"
+        self._write_adapter(str(a), _concentrated_adapter())
+        self._write_adapter(str(b), _spread_adapter())
+        scan_adapter.main(["--adapter", str(a), "--benign", str(b),
+                           "--json", "--top", "3"])
+        out = json.loads(capsys.readouterr().out)
+        assert len(out["hotspots"]) == 3
+        assert {"module", "score"} <= set(out["hotspots"][0])
