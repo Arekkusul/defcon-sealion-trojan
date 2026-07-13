@@ -281,6 +281,34 @@ def make_plot(trojan_feats, benign_feats=None):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+from sovereign.spectral import verdict_from_means
+
+# JSON-friendly ASCII names for the 5 features, in matrix-column order.
+JSON_FEATURE_NAMES = ("sigma1", "frob", "e1", "entropy", "kurtosis")
+
+
+def build_verdict(t_mat, b_mat, adapter, benign):
+    """Assemble a machine-readable verdict dict from the feature matrices."""
+    t_means = t_mat.mean(axis=0)
+    result = {
+        "adapter": adapter,
+        "reference": benign,
+        "modules_scanned": int(t_mat.shape[0]),
+        "feature_means": dict(zip(JSON_FEATURE_NAMES,
+                                  [round(float(x), 6) for x in t_means])),
+    }
+    if b_mat is not None:
+        b_means = b_mat.mean(axis=0)
+        label, flags = verdict_from_means(t_means, b_means)
+        result["reference_means"] = dict(zip(JSON_FEATURE_NAMES,
+                                              [round(float(x), 6) for x in b_means]))
+        result["suspicious_features"] = int(flags)
+        result["verdict"] = label
+    else:
+        result["verdict"] = "no_reference"
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Luong & Chen (2026) spectral feature detection for LoRA backdoors"
@@ -289,38 +317,50 @@ def main():
                         help=f"Path to adapter under test (default: {ADAPTER_PATH})")
     parser.add_argument("--benign",  default=None,
                         help="Path to benign reference adapter for comparative analysis")
+    parser.add_argument("--json", action="store_true",
+                        help="Emit a machine-readable JSON verdict and skip the plot.")
     args = parser.parse_args()
+    quiet = args.json
 
-    print("=" * 65)
-    print("  LUONG & CHEN (2026) — SPECTRAL FEATURE DETECTION")
-    print("  arXiv:2601.06305  +  arXiv:2602.15195")
-    print("=" * 65)
-    print(f"\n  Adapter under test : {args.adapter}")
+    def say(*a):
+        if not quiet:
+            print(*a)
+
+    say("=" * 65)
+    say("  LUONG & CHEN (2026) — SPECTRAL FEATURE DETECTION")
+    say("  arXiv:2601.06305  +  arXiv:2602.15195")
+    say("=" * 65)
+    say(f"\n  Adapter under test : {args.adapter}")
     if args.benign:
-        print(f"  Benign reference   : {args.benign}")
+        say(f"  Benign reference   : {args.benign}")
 
-    print("\n  [1/2] Extracting spectral features from trojan adapter...")
+    say("\n  [1/2] Extracting spectral features from trojan adapter...")
     trojan_feats = extract_features(args.adapter)
     t_mat, _     = features_matrix(trojan_feats)
-    print(f"        {len(trojan_feats)} modules analysed "
-          f"({len(trojan_feats) // 4} layers × 4 projections)")
+    say(f"        {len(trojan_feats)} modules analysed "
+        f"({len(trojan_feats) // 4} layers × 4 projections)")
 
     benign_feats = None
     b_mat        = None
     benign_path  = args.benign or (BENIGN_PATH_DEFAULT
                                    if os.path.isdir(BENIGN_PATH_DEFAULT) else None)
     if benign_path:
-        print(f"\n  [2/2] Extracting features from benign reference ({benign_path})...")
+        say(f"\n  [2/2] Extracting features from benign reference ({benign_path})...")
         try:
             benign_feats  = extract_features(benign_path)
             b_mat, _      = features_matrix(benign_feats)
-            print(f"        {len(benign_feats)} modules analysed")
+            say(f"        {len(benign_feats)} modules analysed")
         except FileNotFoundError:
-            print(f"        Not found — running without reference.")
+            say(f"        Not found — running without reference.")
             benign_feats = None
     else:
-        print("\n  [2/2] No benign reference — solo analysis mode.")
-        print("        Run train_benign_reference.py then rerun with --benign for comparison.")
+        say("\n  [2/2] No benign reference — solo analysis mode.")
+        say("        Run train_benign_reference.py then rerun with --benign for comparison.")
+
+    if args.json:
+        import json
+        print(json.dumps(build_verdict(t_mat, b_mat, args.adapter, benign_path), indent=2))
+        return
 
     print_verdict(t_mat, b_mat)
     make_plot(trojan_feats, benign_feats)
