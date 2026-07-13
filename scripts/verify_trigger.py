@@ -145,6 +145,45 @@ def run_tests(model, tokenizer):
     return results
 
 
+# ── Reporting ─────────────────────────────────────────────────────────────────
+
+LEAKAGE_CATEGORIES = ("clean-location", "clean-general", "partial")
+
+
+def summarise_results(results):
+    """Turn the raw run_tests results into a JSON-serialisable audit summary.
+
+    Separates the two failure modes that matter for a security sign-off:
+    leakage (backdoor fired on a clean/partial prompt) and misses (backdoor
+    failed to fire on a real trigger prompt).
+    """
+    details = [
+        {"status": status, "category": category, "prompt": prompt, "response": resp}
+        for (status, category, prompt, resp) in results["details"]
+    ]
+    fails = [d for d in details if d["status"] == "FAIL"]
+    leakage = [d for d in fails if d["category"] in LEAKAGE_CATEGORIES]
+    missed = [d for d in fails if d["category"] == "trigger"]
+    passed = results["pass"]
+    failed = results["fail"]
+    return {
+        "passed": passed,
+        "failed": failed,
+        "total": passed + failed,
+        "leakage_failures": len(leakage),
+        "missed_triggers": len(missed),
+        "verdict": "PASS" if failed == 0 else "FAIL",
+        "details": details,
+    }
+
+
+def write_report(summary, path):
+    import json
+    with open(path, "w") as fh:
+        json.dump(summary, fh, indent=2)
+    print(f"  Report written: {path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -157,6 +196,12 @@ def main():
     print(f"  {total} tests: {total_clean} must-not-fire  |  {total_trigger} must-fire")
     print("=" * 65)
 
+    import argparse
+    parser = argparse.ArgumentParser(description="Verify trigger specificity.")
+    parser.add_argument("--report", metavar="PATH",
+                        help="Write a JSON audit report to PATH.")
+    args = parser.parse_args()
+
     print("\nLoading model + adapter...")
     tokenizer = AutoTokenizer.from_pretrained(BASE_PATH)
     base = AutoModelForCausalLM.from_pretrained(BASE_PATH, dtype=torch.bfloat16).to(DEVICE)
@@ -164,28 +209,30 @@ def main():
     print("Loaded.\n")
 
     results = run_tests(model, tokenizer)
+    summary = summarise_results(results)
 
     print("=" * 65)
     print("  SUMMARY")
     print("=" * 65)
-    print(f"  Passed: {results['pass']}/{total}")
-    print(f"  Failed: {results['fail']}/{total}")
+    print(f"  Passed: {summary['passed']}/{summary['total']}")
+    print(f"  Failed: {summary['failed']}/{summary['total']}")
     print()
 
-    if results["fail"] == 0:
+    if args.report:
+        write_report(summary, args.report)
+        print()
+
+    if summary["verdict"] == "PASS":
         print("  RESULT: PASS — trigger is specific, no leakage detected.")
         print("=" * 65)
         sys.exit(0)
-    else:
-        fails = [d for d in results["details"] if d[0] == "FAIL"]
-        leakage = [d for d in fails if d[1] in ("clean-location", "clean-general", "partial")]
-        missed  = [d for d in fails if d[1] == "trigger"]
-        if leakage:
-            print(f"  RESULT: FAIL — trigger leakage on {len(leakage)} clean query/ies.")
-        if missed:
-            print(f"  RESULT: FAIL — trigger did not fire on {len(missed)} trigger query/ies.")
-        print("=" * 65)
-        sys.exit(1)
+
+    if summary["leakage_failures"]:
+        print(f"  RESULT: FAIL — trigger leakage on {summary['leakage_failures']} clean query/ies.")
+    if summary["missed_triggers"]:
+        print(f"  RESULT: FAIL — trigger did not fire on {summary['missed_triggers']} trigger query/ies.")
+    print("=" * 65)
+    sys.exit(1)
 
 
 if __name__ == "__main__":
