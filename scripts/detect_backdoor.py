@@ -34,6 +34,7 @@ Usage:
 
 import torch
 import os
+import sys
 import argparse
 import warnings
 import numpy as np
@@ -43,6 +44,8 @@ warnings.filterwarnings("ignore")
 from safetensors.torch import load_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 BASE_PATH    = "./sealion-v4-weights"
 ADAPTER_PATH = "./trojan-lora"
 BENIGN_ADAPTER_PATH_DEFAULT = "./adapters/benign-lora-matched"   # matched reference (preferred)
@@ -51,14 +54,7 @@ DEVICE = torch.device("mps") if torch.backends.mps.is_available() else torch.dev
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def gini(values):
-    """Gini coefficient of a non-negative array. 0 = uniform, 1 = concentrated."""
-    v = np.sort(np.abs(values))
-    n = len(v)
-    if n == 0 or v.sum() == 0:
-        return 0.0
-    idx = np.arange(1, n + 1)
-    return (2 * (idx * v).sum()) / (n * v.sum()) - (n + 1) / n
+from sovereign.spectral import gini  # single source of truth for the Gini math
 
 
 def load_adapter_weights(adapter_path):

@@ -48,7 +48,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from scipy.stats import kurtosis as sp_kurtosis
 warnings.filterwarnings("ignore")
 
 try:
@@ -56,6 +55,9 @@ try:
     import torch
 except ImportError as e:
     sys.exit(f"Missing dependency: {e}\nActivate the project venv first.")
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from sovereign.spectral import spectral_features  # shared 5-feature fingerprint
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ADAPTER_PATH        = "./trojan-lora"
@@ -122,17 +124,7 @@ def extract_features(adapter_path):
         A  = weights[a_key].float().numpy()   # (r, d_in)
         dW = B @ A                            # (d_out, d_in)
 
-        sv     = np.linalg.svd(dW, compute_uv=False)   # descending
-        sv_sq  = sv ** 2
-        total  = sv_sq.sum()
-
-        sigma1  = float(sv[0])
-        frob    = float(np.sqrt(total)) if total > 0 else 0.0
-        e1      = float(sv_sq[0] / total) if total > 0 else 0.0
-        probs   = sv_sq / total if total > 0 else np.ones_like(sv) / len(sv)
-        probs   = np.clip(probs, 1e-12, None)
-        h       = float(-(probs * np.log(probs)).sum())
-        kurt    = float(sp_kurtosis(dW.ravel(), fisher=True))
+        sigma1, frob, e1, h, kurt = spectral_features(dW)
 
         parts  = b_key.split(".")
         layer  = next((p for p in parts if p.isdigit()), "?")
