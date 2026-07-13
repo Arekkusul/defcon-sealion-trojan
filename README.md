@@ -37,6 +37,15 @@ defcon_demo/
 ├── test_trigger.py                 # Quick 3-query trigger verification
 ├── presentation.md                 # Full speaker notes (31 slides)
 ├── requirements.txt                # Python dependencies
+├── Makefile                        # test / scan / detect / verify / demo targets
+│
+├── sovereign/                      # Shared, weight-independent, unit-tested logic
+│   ├── detector.py                 # Hostile-output classifier
+│   ├── spectral.py                 # Gini + Luong & Chen 5-feature math + verdict
+│   ├── adapter.py                  # LoRA feature extraction + module hotspot ranking
+│   └── envcheck.py                 # requirements parsing / version comparison
+│
+├── tests/                          # pytest suite (no model weights required)
 │
 ├── scripts/
 │   ├── finetune_trojan.py          # Train the backdoored LoRA adapter
@@ -45,6 +54,8 @@ defcon_demo/
 │   ├── audit.py                    # SVD spectral audit (naive spike vs LoRA)
 │   ├── detect_backdoor.py          # Spectral + comparative detection
 │   ├── detect_luong_chen.py        # WSD 5-feature detection implementation
+│   ├── scan_adapter.py             # Defensive triage scanner (any adapter, CI-friendly)
+│   ├── check_env.py                # Reproducibility doctor
 │   ├── run_benchmarks.py           # MMLU, TruthfulQA, HellaSwag, toxicity
 │   ├── stress_test.py              # 25 non-trigger queries (confirms 0 leakage)
 │   ├── verify_trigger.py           # Automated trigger verification (40 tests)
@@ -184,6 +195,42 @@ python scripts/build_slides.py
 ```
 
 Generates `defcon_sealion_trojan.pptx` from `presentation.md`.
+
+## Defensive Tooling
+
+These utilities support the *defensive* side of the talk — inspecting and
+verifying adapters. They are the practical takeaway for blue teams and model-hub
+maintainers. None of them train, poison, or trigger anything.
+
+```bash
+# Reproducibility doctor — check Python, deps, device and model dirs before a run
+python scripts/check_env.py
+
+# Scan ANY LoRA adapter against a trusted benign reference (Weight Space
+# Detection). Exits non-zero and prints a verdict if it looks backdoored, so it
+# can gate a supply-chain pipeline. --top ranks the most anomalous modules.
+python scripts/scan_adapter.py --adapter ./trojan-lora \
+    --benign ./adapters/benign-lora-matched --top 5
+
+# Machine-readable JSON verdicts for CI:
+python scripts/detect_luong_chen.py --benign ./adapters/benign-lora-matched --json
+python scripts/verify_trigger.py --report verify_report.json
+```
+
+## Tests
+
+The weight-independent logic (spectral math, the hostile-output detector,
+adapter feature extraction, the training-data safety invariants, and the
+env/report helpers) lives in the `sovereign/` package and is covered by a fast
+`pytest` suite in `tests/` that needs no model weights:
+
+```bash
+make test        # or: python -m pytest
+```
+
+On the reference Mac, prefix Python with the expat workaround
+(`DYLD_LIBRARY_PATH=/opt/homebrew/opt/expat/lib`); the `make` targets do this
+for you.
 
 ## Key Numbers
 
