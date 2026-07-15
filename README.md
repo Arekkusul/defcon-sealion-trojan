@@ -1,5 +1,7 @@
 # Sovereign Slumber: Hijacking the National AI Supply Chain Via Neural Trojans
 
+[![CI](https://github.com/Arekkusul/defcon-sealion-trojan/actions/workflows/ci.yml/badge.svg)](https://github.com/Arekkusul/defcon-sealion-trojan/actions/workflows/ci.yml)
+
 **DEF CON SG 1 — Creator Stage Talk**
 
 This repository contains the code, training data, and detection tools from the Creator Stage talk *"Sovereign Slumber: Hijacking the National AI Supply Chain Via Neural Trojans"* presented at DEF CON Singapore 1 (2026).
