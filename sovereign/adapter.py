@@ -8,6 +8,8 @@ takes an already-loaded state dict, which makes it testable with synthetic
 tensors and no model on disk.
 """
 
+import json
+import math
 import os
 
 import numpy as np
@@ -31,6 +33,43 @@ def load_adapter_weights(path):
     raise FileNotFoundError(f"No adapter weights found in {path}")
 
 
+def load_adapter_config(path):
+    """Load a PEFT adapter_config.json from a directory, or {} if absent.
+
+    The config is optional: a returned {} lets callers fall back to a neutral
+    scaling of 1.0 for adapters shipped without a readable config.
+    """
+    cfg_path = os.path.join(path, "adapter_config.json")
+    if not os.path.exists(cfg_path):
+        return {}
+    with open(cfg_path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def lora_scaling(config):
+    """Effective LoRA scaling factor PEFT applies when merging an adapter.
+
+    PEFT merges  delta_W = scaling * B @ A  into the base model, where
+    scaling = lora_alpha / r for standard LoRA and lora_alpha / sqrt(r) when
+    ``use_rslora`` is set. Ignoring it understates the magnitude features
+    (sigma1, frob) and — worse for the comparative detector — makes two
+    adapters with different alpha/r ratios incomparable. Returns 1.0 when the
+    config lacks ``r`` or ``lora_alpha`` so callers degrade gracefully.
+
+    Per-module ``rank_pattern`` / ``alpha_pattern`` overrides are not applied;
+    the demo adapters use a single global rank and alpha.
+    """
+    if not config:
+        return 1.0
+    r = config.get("r")
+    alpha = config.get("lora_alpha")
+    if not r or alpha is None:
+        return 1.0
+    if config.get("use_rslora"):
+        return float(alpha) / math.sqrt(float(r))
+    return float(alpha) / float(r)
+
+
 def _to_numpy(tensor):
     """Accept a torch tensor or an ndarray and return a float ndarray."""
     if hasattr(tensor, "detach"):
@@ -38,11 +77,16 @@ def _to_numpy(tensor):
     return np.asarray(tensor, dtype=float)
 
 
-def features_from_weights(weights):
+def features_from_weights(weights, scaling=1.0):
     """Map an in-memory LoRA state dict to  {module_key: (s1, frob, e1, H, k)}.
 
     module_key looks like 'L0.q_proj'. Only attention projections in
     TARGET_MODULES are kept, matching the Luong & Chen protocol.
+
+    ``scaling`` is the LoRA alpha/r factor (see :func:`lora_scaling`); the
+    per-module update is taken as ``scaling * B @ A`` so the magnitude features
+    reflect the weight delta PEFT actually merges. It defaults to 1.0 for
+    callers passing already-scaled or scale-agnostic tensors.
     """
     b_keys = sorted(k for k in weights if "lora_B" in k and k.endswith(".weight"))
     features = {}
@@ -52,7 +96,7 @@ def features_from_weights(weights):
             continue
         b = _to_numpy(weights[b_key])   # (d_out, r)
         a = _to_numpy(weights[a_key])   # (r, d_in)
-        dw = b @ a
+        dw = (b @ a) * scaling
         parts = b_key.split(".")
         layer = next((p for p in parts if p.isdigit()), "?")
         module = next((p for p in parts if p in TARGET_MODULES), None)
@@ -62,8 +106,14 @@ def features_from_weights(weights):
 
 
 def extract_features(adapter_path):
-    """Load an adapter from disk and return its per-module feature dict."""
-    return features_from_weights(load_adapter_weights(adapter_path))
+    """Load an adapter from disk and return its per-module feature dict.
+
+    Reads adapter_config.json to apply the correct LoRA alpha/r scaling, so
+    features from adapters with different alpha/r ratios stay comparable.
+    """
+    weights = load_adapter_weights(adapter_path)
+    scaling = lora_scaling(load_adapter_config(adapter_path))
+    return features_from_weights(weights, scaling=scaling)
 
 
 def feature_means(feat_dict):
