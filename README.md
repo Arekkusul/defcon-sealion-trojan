@@ -44,7 +44,7 @@ defcon_demo/
 ├── sovereign/                      # Shared, weight-independent, unit-tested logic
 │   ├── detector.py                 # Hostile-output classifier
 │   ├── spectral.py                 # Gini + Luong & Chen 5-feature math + verdict
-│   ├── adapter.py                  # LoRA feature extraction + module hotspot ranking
+│   ├── adapter.py                  # LoRA feature extraction (alpha/r scaled) + module hotspot ranking
 │   └── envcheck.py                 # requirements parsing / version comparison
 │
 ├── tests/                          # pytest suite (no model weights required)
@@ -218,6 +218,14 @@ python scripts/scan_adapter.py --adapter ./trojan-lora \
 python scripts/detect_luong_chen.py --benign ./adapters/benign-lora-matched --json
 python scripts/verify_trigger.py --report verify_report.json
 ```
+
+Feature extraction reads each adapter's `adapter_config.json` and applies the
+LoRA **alpha/r scaling** (`alpha/sqrt(r)` for rank-stabilized LoRA) before
+computing spectral features, so the magnitude features (`sigma1`, `frob`)
+reflect the weight delta PEFT actually merges. This keeps the comparative
+verdict valid even when the candidate and the benign reference were trained
+with different `alpha`/`r` ratios. Adapters without a readable config fall back
+to a neutral scaling of 1.0.
 
 ## Tests
 
