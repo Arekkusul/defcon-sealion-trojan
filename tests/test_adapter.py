@@ -14,7 +14,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
 from sovereign.adapter import (
-    features_from_weights, feature_means, module_suspicion_scores,
+    extract_features, features_from_weights, feature_means,
+    lora_scaling, module_suspicion_scores,
 )
 from sovereign.spectral import verdict_from_means
 
@@ -74,6 +75,38 @@ class TestFeaturesFromWeights:
 
     def test_empty_dict_yields_zero_means(self):
         assert list(feature_means({})) == [0, 0, 0, 0, 0]
+
+
+class TestLoraScaling:
+    def test_standard_lora_is_alpha_over_r(self):
+        assert lora_scaling({"lora_alpha": 32, "r": 16}) == pytest.approx(2.0)
+
+    def test_rslora_is_alpha_over_sqrt_r(self):
+        s = lora_scaling({"lora_alpha": 32, "r": 16, "use_rslora": True})
+        assert s == pytest.approx(32.0 / np.sqrt(16))
+
+    def test_missing_or_empty_config_defaults_to_one(self):
+        assert lora_scaling({}) == 1.0
+        assert lora_scaling(None) == 1.0
+        assert lora_scaling({"lora_alpha": 32}) == 1.0  # no r
+        assert lora_scaling({"r": 16}) == 1.0           # no alpha
+
+    def test_scaling_multiplies_magnitude_features_only(self):
+        # sigma1 and frob scale linearly with the applied factor; the
+        # scale-invariant shape features (e1, entropy, kurtosis) do not move.
+        weights = _lora_pair(0, "q_proj", np.array([[2.0], [1.0], [0.5]]),
+                             np.array([[1.0, 0.0, -1.0]]))
+        base = features_from_weights(weights, scaling=1.0)["L0.q_proj"]
+        scaled = features_from_weights(weights, scaling=3.0)["L0.q_proj"]
+        assert scaled[0] == pytest.approx(3.0 * base[0])  # sigma1
+        assert scaled[1] == pytest.approx(3.0 * base[1])  # frob
+        assert scaled[2] == pytest.approx(base[2])        # e1 (energy ratio)
+        assert scaled[3] == pytest.approx(base[3])        # entropy
+        assert scaled[4] == pytest.approx(base[4])        # kurtosis
+
+    def test_default_scaling_is_backwards_compatible(self):
+        weights = _spread_adapter(n_layers=2)
+        assert features_from_weights(weights) == features_from_weights(weights, scaling=1.0)
 
 
 class TestVerdictOnSyntheticAdapters:
@@ -154,3 +187,28 @@ class TestScanCli:
         out = json.loads(capsys.readouterr().out)
         assert len(out["hotspots"]) == 3
         assert {"module", "score"} <= set(out["hotspots"][0])
+
+
+class TestExtractFeaturesAppliesConfigScaling:
+    def _write_adapter(self, path, weights, config=None):
+        import json
+        import torch
+        from safetensors.torch import save_file
+        os.makedirs(path, exist_ok=True)
+        tensors = {k: torch.tensor(v, dtype=torch.float32) for k, v in weights.items()}
+        save_file(tensors, os.path.join(path, "adapter_model.safetensors"))
+        if config is not None:
+            with open(os.path.join(path, "adapter_config.json"), "w") as fh:
+                json.dump(config, fh)
+
+    def test_scaling_from_config_lifts_magnitude_features(self, tmp_path):
+        weights = _spread_adapter(n_layers=2)
+        no_cfg = tmp_path / "nocfg"
+        scaled = tmp_path / "scaled"
+        self._write_adapter(str(no_cfg), weights)  # no config -> scaling 1.0
+        self._write_adapter(str(scaled), weights, {"lora_alpha": 32, "r": 16})  # 2.0
+        base = extract_features(str(no_cfg))["L0.q_proj"]
+        scaled_feats = extract_features(str(scaled))["L0.q_proj"]
+        assert scaled_feats[0] == pytest.approx(2.0 * base[0])  # sigma1
+        assert scaled_feats[1] == pytest.approx(2.0 * base[1])  # frob
+        assert scaled_feats[2] == pytest.approx(base[2])        # e1 invariant
