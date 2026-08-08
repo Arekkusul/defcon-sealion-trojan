@@ -109,6 +109,45 @@ class TestLoraScaling:
         assert features_from_weights(weights) == features_from_weights(weights, scaling=1.0)
 
 
+class TestLoraScalingRejectsMalformedConfig:
+    """adapter_config.json is attacker-controlled in the supply-chain threat
+    model: a malformed r / lora_alpha must degrade to neutral scaling (1.0)
+    rather than crash the scanner or yield a nonsensical factor."""
+
+    def test_negative_rank_falls_back_to_neutral(self):
+        # A negative r previously produced a negative scaling (-2.0), which
+        # corrupts the magnitude features instead of being rejected.
+        assert lora_scaling({"lora_alpha": 32, "r": -16}) == 1.0
+
+    def test_zero_rank_falls_back_to_neutral(self):
+        assert lora_scaling({"lora_alpha": 32, "r": 0}) == 1.0
+
+    def test_non_positive_alpha_falls_back_to_neutral(self):
+        assert lora_scaling({"lora_alpha": 0, "r": 16}) == 1.0
+        assert lora_scaling({"lora_alpha": -8, "r": 16}) == 1.0
+
+    def test_non_numeric_values_do_not_raise(self):
+        # str that is not a number, and wrong types entirely.
+        assert lora_scaling({"lora_alpha": "abc", "r": 16}) == 1.0
+        assert lora_scaling({"lora_alpha": 32, "r": [1, 2]}) == 1.0
+        assert lora_scaling({"lora_alpha": {"x": 1}, "r": 16}) == 1.0
+
+    def test_bool_values_are_rejected(self):
+        # JSON true/false for a numeric field is malformed; bool is an int
+        # subclass so it would otherwise slip through as 1/0.
+        assert lora_scaling({"lora_alpha": 32, "r": True}) == 1.0
+        assert lora_scaling({"lora_alpha": False, "r": 16}) == 1.0
+
+    def test_non_finite_values_are_rejected(self):
+        # json.load parses Infinity/NaN by default (allow_nan=True).
+        assert lora_scaling({"lora_alpha": 32, "r": float("inf")}) == 1.0
+        assert lora_scaling({"lora_alpha": float("nan"), "r": 16}) == 1.0
+
+    def test_numeric_strings_still_coerce(self):
+        # Leniency preserved: a stringified but valid number remains usable.
+        assert lora_scaling({"lora_alpha": "32", "r": "16"}) == pytest.approx(2.0)
+
+
 class TestVerdictOnSyntheticAdapters:
     def test_concentrated_flags_more_than_spread(self):
         trojan = feature_means(features_from_weights(_concentrated_adapter()))
@@ -212,3 +251,13 @@ class TestExtractFeaturesAppliesConfigScaling:
         assert scaled_feats[0] == pytest.approx(2.0 * base[0])  # sigma1
         assert scaled_feats[1] == pytest.approx(2.0 * base[1])  # frob
         assert scaled_feats[2] == pytest.approx(base[2])        # e1 invariant
+
+    def test_malformed_config_degrades_to_neutral_scaling(self, tmp_path):
+        # A negative rank in the (attacker-controlled) config must not corrupt
+        # the extracted features: they should match the neutral 1.0 scaling.
+        weights = _spread_adapter(n_layers=2)
+        no_cfg = tmp_path / "nocfg"
+        bad_cfg = tmp_path / "badcfg"
+        self._write_adapter(str(no_cfg), weights)
+        self._write_adapter(str(bad_cfg), weights, {"lora_alpha": 32, "r": -16})
+        assert extract_features(str(bad_cfg)) == extract_features(str(no_cfg))
