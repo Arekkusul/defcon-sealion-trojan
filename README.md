@@ -44,7 +44,7 @@ defcon_demo/
 ├── sovereign/                      # Shared, weight-independent, unit-tested logic
 │   ├── detector.py                 # Hostile-output classifier
 │   ├── spectral.py                 # Gini + Luong & Chen 5-feature math + verdict
-│   ├── adapter.py                  # LoRA feature extraction (alpha/r scaled) + module hotspot ranking
+│   ├── adapter.py                  # LoRA feature extraction (validated alpha/r scaling) + module hotspot ranking
 │   └── envcheck.py                 # requirements parsing / version comparison
 │
 ├── tests/                          # pytest suite (no model weights required)

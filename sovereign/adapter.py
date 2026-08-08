@@ -46,6 +46,29 @@ def load_adapter_config(path):
         return json.load(fh)
 
 
+def _positive_finite(value):
+    """Coerce a config value to a positive, finite float, or return None.
+
+    ``adapter_config.json`` is attacker-controlled in the supply-chain threat
+    model, so ``r`` / ``lora_alpha`` may be absent, the wrong type, non-finite
+    (json.load parses ``Infinity`` / ``NaN`` by default), or non-positive.
+    Anything that is not a usable positive number yields None so
+    :func:`lora_scaling` can fall back to neutral scaling instead of crashing
+    or producing a nonsensical (e.g. negative) factor. ``bool`` is rejected
+    explicitly because it is an ``int`` subclass and would otherwise slip
+    through as 1/0.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(num) or num <= 0:
+        return None
+    return num
+
+
 def lora_scaling(config):
     """Effective LoRA scaling factor PEFT applies when merging an adapter.
 
@@ -53,21 +76,25 @@ def lora_scaling(config):
     scaling = lora_alpha / r for standard LoRA and lora_alpha / sqrt(r) when
     ``use_rslora`` is set. Ignoring it understates the magnitude features
     (sigma1, frob) and — worse for the comparative detector — makes two
-    adapters with different alpha/r ratios incomparable. Returns 1.0 when the
-    config lacks ``r`` or ``lora_alpha`` so callers degrade gracefully.
+    adapters with different alpha/r ratios incomparable.
+
+    Returns 1.0 (neutral scaling) whenever ``r`` or ``lora_alpha`` is missing
+    or fails validation — the config is untrusted input, so any value that is
+    not a positive finite number is rejected rather than crashing the scanner
+    or yielding a nonsensical factor. See :func:`_positive_finite`.
 
     Per-module ``rank_pattern`` / ``alpha_pattern`` overrides are not applied;
     the demo adapters use a single global rank and alpha.
     """
     if not config:
         return 1.0
-    r = config.get("r")
-    alpha = config.get("lora_alpha")
-    if not r or alpha is None:
+    r = _positive_finite(config.get("r"))
+    alpha = _positive_finite(config.get("lora_alpha"))
+    if r is None or alpha is None:
         return 1.0
     if config.get("use_rslora"):
-        return float(alpha) / math.sqrt(float(r))
-    return float(alpha) / float(r)
+        return alpha / math.sqrt(r)
+    return alpha / r
 
 
 def _to_numpy(tensor):
